@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -12,20 +13,7 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-type Item struct {
-	Id    string `bson:"_id"`
-	Path  string `bson:"path"`
-	Queue uint32 `bson:"queue"`
-	Plays uint32 `bson:"plays"`
-}
-
-var paths []string
-
 const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
-}
 
 func NewId(n int) string {
 	b := make([]byte, n)
@@ -35,43 +23,94 @@ func NewId(n int) string {
 	return string(b)
 }
 
-func visit(path string, f os.FileInfo, err error) error {
-	if f.Mode().IsRegular() {
+type Item struct {
+	Id    string `bson:"_id"`
+	Path  string `bson:"path"`
+	Queue uint32 `bson:"queue"`
+	Plays uint32 `bson:"plays"`
+}
+
+type FileLoader struct {
+	base  string
+	paths []string
+}
+
+func (f *FileLoader) Load() error {
+
+	// userPath = "/Users/jsgoyette/Data/Downloads"
+
+	if f.base == "" {
+		return errors.New("missing file path")
+	}
+
+	// check that base exists
+	if _, err := os.Stat(f.base); err != nil {
+		return err
+	}
+
+	// load the files into `paths`
+	err := filepath.Walk(f.base, f.visit)
+
+	return err
+}
+
+func (f *FileLoader) visit(path string, file os.FileInfo, err error) error {
+	if file.Mode().IsRegular() {
 		if filepath.Ext(path) == ".mp3" {
-			paths = append(paths, path)
+			f.paths = append(f.paths, path)
 		}
 	}
 	return nil
 }
 
-func loadPaths(userPath string) {
+func (f *FileLoader) Insert(c *mgo.Collection, startingQueue uint32) {
 
-	// userPath = "/Users/jsgoyette/Data/Downloads"
+	// for each path found, check if it exists
+	// only insert if it does not already exist
+	for _, path := range f.paths {
 
-	if userPath == "" {
-		fmt.Println("missing file path")
-		os.Exit(2)
+		// skip if already loaded
+		if count, _ := c.Find(bson.M{"path": path}).Count(); count > 0 {
+			fmt.Printf("%v SKIPPING\n", path)
+			continue
+		}
+
+		startingQueue++
+
+		item := Item{
+			Id:    NewId(18),
+			Path:  path,
+			Queue: startingQueue,
+			Plays: 0,
+		}
+
+		fmt.Printf("%v\n", path)
+
+		// insert item
+		if err := c.Insert(item); err != nil {
+			fmt.Println("could not insert", err)
+		}
 	}
+}
 
-	// check that userPath exists
-	if _, err := os.Stat(userPath); err != nil {
-		fmt.Println(userPath, err)
-		os.Exit(2)
-	}
-
-	// load the files into `paths`
-	err := filepath.Walk(userPath, visit)
-	if err != nil {
-		panic(err)
-	}
+func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
 }
 
 func main() {
 
 	flag.Parse()
-	userPath := flag.Arg(0)
 
-	loadPaths(userPath)
+	f := &FileLoader{
+		base: flag.Arg(0),
+	}
+
+	// load files from path
+	err := f.Load()
+	if err != nil {
+		fmt.Println("failed to load files:", err)
+		os.Exit(1)
+	}
 
 	// start mongo connection
 	session, err := mgo.Dial("127.0.0.1")
@@ -90,32 +129,6 @@ func main() {
 		fmt.Println("could not find highest queue", err)
 	}
 
-	queue := highestQueuedItem.Queue
+	f.Insert(c, highestQueuedItem.Queue)
 
-	// for each path found, check if it exists
-	// only insert if it does not already exist
-	for _, path := range paths {
-
-		// skip if already loaded
-		if count, _ := c.Find(bson.M{"path": path}).Count(); count > 0 {
-			fmt.Printf("%v SKIPPING\n", path)
-			continue
-		}
-
-		queue++
-
-		item := Item{
-			Id:    NewId(18),
-			Path:  path,
-			Queue: queue,
-			Plays: 0,
-		}
-
-		fmt.Printf("%v\n", path)
-
-		// insert item
-		if err = c.Insert(item); err != nil {
-			fmt.Println("could not insert", err)
-		}
-	}
 }
