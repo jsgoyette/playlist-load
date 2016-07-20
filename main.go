@@ -31,7 +31,7 @@ type Item struct {
 }
 
 type FileLoader struct {
-	base  string
+	Base  string
 	paths []string
 }
 
@@ -39,17 +39,17 @@ func (f *FileLoader) Load() error {
 
 	// userPath = "/Users/jsgoyette/Data/Downloads"
 
-	if f.base == "" {
+	if f.Base == "" {
 		return errors.New("missing file path")
 	}
 
-	// check that base exists
-	if _, err := os.Stat(f.base); err != nil {
+	// check that Base exists
+	if _, err := os.Stat(f.Base); err != nil {
 		return err
 	}
 
 	// load the files into `paths`
-	err := filepath.Walk(f.base, f.visit)
+	err := filepath.Walk(f.Base, f.visit)
 
 	return err
 }
@@ -102,7 +102,7 @@ func main() {
 	flag.Parse()
 
 	f := &FileLoader{
-		base: flag.Arg(0),
+		Base: flag.Arg(0),
 	}
 
 	// load files from path
