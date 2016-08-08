@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"gopkg.in/mgo.v2"
@@ -23,6 +24,10 @@ func NewId(n int) string {
 	return string(b)
 }
 
+var queueStart uint32
+var queueMutex *sync.Mutex = &sync.Mutex{}
+
+// playlist itme
 type Item struct {
 	Id    string `bson:"_id"`
 	Path  string `bson:"path"`
@@ -30,67 +35,144 @@ type Item struct {
 	Plays uint32 `bson:"plays"`
 }
 
-type FileLoader struct {
-	Base  string
-	paths []string
+// walkFiles starts a goroutine to walk the directory tree at root and send the
+// path of each regular file on the string channel. It sends the result of the
+// walk on the error channel. If done is closed, walkFiles abandons its work.
+func walkFiles(root string, done <-chan struct{}) (<-chan string, <-chan error) {
+
+	paths := make(chan string)
+	errc := make(chan error, 1)
+
+	go func() {
+
+		// close the paths channel after Walk returns.
+		defer close(paths)
+
+		// no select needed for this send, since errc is buffered.
+		errc <- filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() || filepath.Ext(path) != ".mp3" {
+				return nil
+			}
+
+			select {
+			case paths <- path:
+			case <-done:
+				return errors.New("walk canceled")
+			}
+			return nil
+		})
+	}()
+
+	return paths, errc
 }
 
-func (f *FileLoader) Load() error {
-
-	// userPath = "/Users/jsgoyette/Data/Downloads"
-
-	if f.Base == "" {
-		return errors.New("missing file path")
-	}
-
-	// check that Base exists
-	if _, err := os.Stat(f.Base); err != nil {
-		return err
-	}
-
-	// load the files into `paths`
-	err := filepath.Walk(f.Base, f.visit)
-
-	return err
+// result is the product of reading a file
+type result struct {
+	path string
+	err  error
 }
 
-func (f *FileLoader) visit(path string, file os.FileInfo, err error) error {
-	if file.Mode().IsRegular() {
-		if filepath.Ext(path) == ".mp3" {
-			f.paths = append(f.paths, path)
-		}
-	}
-	return nil
-}
+// digester reads path names from paths, writes to db and sends the corresponding
+// files on c until either paths or done is closed.
+func digester(collection *mgo.Collection, paths <-chan string, c chan<- result, done <-chan struct{}) {
 
-func (f *FileLoader) Insert(c *mgo.Collection, startingQueue uint32) {
-
-	// for each path found, check if it exists
-	// only insert if it does not already exist
-	for _, path := range f.paths {
+	for path := range paths {
 
 		// skip if already loaded
-		if count, _ := c.Find(bson.M{"path": path}).Count(); count > 0 {
+		if count, _ := collection.Find(bson.M{"path": path}).Count(); count > 0 {
 			fmt.Printf("%v SKIPPING\n", path)
 			continue
 		}
 
-		startingQueue++
+		queueMutex.Lock()
+		queueStart++
+		queueMutex.Unlock()
 
 		item := Item{
 			Id:    NewId(18),
 			Path:  path,
-			Queue: startingQueue,
+			Queue: queueStart,
 			Plays: 0,
 		}
 
 		fmt.Printf("%v\n", path)
 
 		// insert item
-		if err := c.Insert(item); err != nil {
+		err := collection.Insert(item)
+		if err != nil {
 			fmt.Println("could not insert", err)
 		}
+
+		select {
+		case c <- result{path, err}:
+		case <-done:
+			return
+		}
 	}
+}
+
+func LoadFiles(root string) error {
+
+	// LoadFiles closes the done channel when it returns; it may do so before
+	// receiving all the values from c and errc.
+	done := make(chan struct{})
+	defer close(done)
+
+	paths, errc := walkFiles(root, done)
+
+	// start mongo connection
+	session, err := mgo.Dial("127.0.0.1")
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	session.SetMode(mgo.Monotonic, true)
+	collection := session.DB("playlist").C("items")
+
+	// grab the current highest `queue`
+	var highestQueuedItem Item
+	err = collection.Find(bson.M{}).Sort("-queue").One(&highestQueuedItem)
+	if err != nil {
+		fmt.Println("could not find highest queue", err)
+	} else {
+		queueStart = highestQueuedItem.Queue
+		fmt.Printf("using %v as starting queue\n", queueStart)
+	}
+
+	// Start a fixed number of goroutines to read and digest files.
+	const numDigesters = 20
+	var wg sync.WaitGroup
+	wg.Add(numDigesters)
+	c := make(chan result)
+
+	for i := 0; i < numDigesters; i++ {
+		go func() {
+			digester(collection, paths, c, done)
+			wg.Done()
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+
+	for r := range c {
+		if r.err != nil {
+			return r.err
+		}
+	}
+
+	// Check whether the Walk failed.
+	if err := <-errc; err != nil {
+		return err
+	}
+	return nil
 }
 
 func init() {
@@ -101,34 +183,11 @@ func main() {
 
 	flag.Parse()
 
-	f := &FileLoader{
-		Base: flag.Arg(0),
-	}
+	err := LoadFiles(flag.Arg(0))
+	// err := LoadFiles("/Users/jsgoyette/Data/Music")
 
-	// load files from path
-	err := f.Load()
 	if err != nil {
-		fmt.Println("failed to load files:", err)
-		os.Exit(1)
+		fmt.Println(err)
+		return
 	}
-
-	// start mongo connection
-	session, err := mgo.Dial("127.0.0.1")
-	if err != nil {
-		panic(err)
-	}
-	defer session.Close()
-
-	session.SetMode(mgo.Monotonic, true)
-	c := session.DB("playlist").C("items")
-
-	// grab the current highest `queue`
-	var highestQueuedItem Item
-	err = c.Find(bson.M{}).Sort("-queue").One(&highestQueuedItem)
-	if err != nil {
-		fmt.Println("could not find highest queue", err)
-	}
-
-	f.Insert(c, highestQueuedItem.Queue)
-
 }
