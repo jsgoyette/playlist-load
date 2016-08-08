@@ -35,6 +35,12 @@ type Item struct {
 	Plays uint32 `bson:"plays"`
 }
 
+// result is the product of reading a file
+type result struct {
+	path string
+	err  error
+}
+
 // walkFiles starts a goroutine to walk the directory tree at root and send the
 // path of each regular file on the string channel. It sends the result of the
 // walk on the error channel. If done is closed, walkFiles abandons its work.
@@ -68,12 +74,6 @@ func walkFiles(root string, done <-chan struct{}) (<-chan string, <-chan error) 
 	}()
 
 	return paths, errc
-}
-
-// result is the product of reading a file
-type result struct {
-	path string
-	err  error
 }
 
 // digester reads path names from paths, writes to db and sends the corresponding
