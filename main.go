@@ -118,7 +118,7 @@ func digester(c *mgo.Collection, paths <-chan string, results chan<- result, don
 func LoadFiles(root string, c *mgo.Collection) error {
 
 	// LoadFiles closes the done channel when it returns; it may do so before
-	// receiving all the values from results and errc.
+	// receiving all the values from results and errc
 	done := make(chan struct{})
 	defer close(done)
 
@@ -134,7 +134,7 @@ func LoadFiles(root string, c *mgo.Collection) error {
 		fmt.Printf("using %v as starting queue\n", queueStart)
 	}
 
-	// Start a fixed number of goroutines to read and digest files.
+	// start a fixed number of goroutines to read and digest files
 	const numDigesters = 20
 	var wg sync.WaitGroup
 	wg.Add(numDigesters)
@@ -158,7 +158,7 @@ func LoadFiles(root string, c *mgo.Collection) error {
 		}
 	}
 
-	// Check whether the Walk failed.
+	// check whether the walk failed
 	if err := <-errc; err != nil {
 		return err
 	}
