@@ -183,7 +183,7 @@ func main() {
 	session.SetMode(mgo.Monotonic, true)
 	collection := session.DB("playlist").C("items")
 
-	err := LoadFiles(flag.Arg(0), collection)
+	err = LoadFiles(flag.Arg(0), collection)
 	// err = LoadFiles("/Users/jsgoyette/Data/Music", collection)
 
 	if err != nil {
