@@ -67,7 +67,7 @@ func walkFiles(root string, done <-chan struct{}) (<-chan string, <-chan error) 
 			select {
 			case paths <- path:
 			case <-done:
-				return errors.New("walk canceled")
+				return errors.New("walk cancelled")
 			}
 			return nil
 		})
