@@ -1,27 +1,28 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
 
-const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const alphanum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const alphanumLen = len(alphanum)
 
 func NewId(n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+	bytes := make([]byte, n)
+	rand.Read(bytes)
+	for i, b := range bytes {
+		bytes[i] = alphanum[b%byte(alphanumLen)]
 	}
-	return string(b)
+	return string(bytes)
 }
 
 var queueStart uint32
@@ -163,10 +164,6 @@ func LoadFiles(root string, c *mgo.Collection) error {
 		return err
 	}
 	return nil
-}
-
-func init() {
-	rand.Seed(time.Now().UTC().UnixNano())
 }
 
 func main() {
